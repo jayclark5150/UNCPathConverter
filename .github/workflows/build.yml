@@ -1,0 +1,57 @@
+name: Build EXE
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the EXE to (leave blank for latest)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PS2EXE
+        shell: pwsh
+        run: Install-Module -Name ps2exe -Force -Scope CurrentUser
+
+      - name: Compile PS1 to EXE
+        id: compile
+        shell: pwsh
+        run: |
+          $ps1 = Get-ChildItem -Filter "*.ps1" | Select-Object -First 1
+          if (-not $ps1) { Write-Error "No .ps1 file found"; exit 1 }
+          $exe = [System.IO.Path]::ChangeExtension($ps1.FullName, ".exe")
+          Invoke-PS2EXE -InputFile $ps1.FullName -OutputFile $exe -NoConsole
+          echo "EXE_PATH=$exe" >> $env:GITHUB_OUTPUT
+          echo "EXE_NAME=$([System.IO.Path]::GetFileName($exe))" >> $env:GITHUB_OUTPUT
+
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "TAG=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "TAG=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            TAG=$(gh release list --limit 1 --json tagName --jq ".[0].tagName")
+            echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload EXE to release
+        shell: bash
+        run: gh release upload "${{ steps.tag.outputs.TAG }}" "${{ steps.compile.outputs.EXE_PATH }}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
